@@ -137,7 +137,9 @@ export class TerrainEngine {
     this.inflight = 0;
     this.maxInflight = 16;
     this.frameNo = 0;
-    this.stats = { visible: 0, loading: 0, total: 0, maxZ: 0 };
+    this.stats = { visible: 0, loading: 0, total: 0, maxZ: 0, fallback: 0 };
+    this.imgFails = 0;
+    this.imgDownUntil = 0;
     this.frustum = new THREE.Frustum();
     this.projScreen = new THREE.Matrix4();
     this.segIndex = new Map();
@@ -265,33 +267,82 @@ export class TerrainEngine {
     return g;
   }
 
+  /** 影像不可用时的中性地表纹理（所有降级瓦片共用，随机斑驳避免纯色塑料感） */
+  fallbackTexture() {
+    if (this._fallbackTex) return this._fallbackTex;
+    const cv = document.createElement('canvas');
+    cv.width = cv.height = 256;
+    const x = cv.getContext('2d');
+    x.fillStyle = '#8a8a7c';
+    x.fillRect(0, 0, 256, 256);
+    let seed = 7;
+    const rand = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+    for (let i = 0; i < 900; i++) {
+      const g = 110 + rand() * 50;
+      x.fillStyle = `rgba(${g | 0},${(g + 6) | 0},${(g - 12) | 0},0.35)`;
+      const r = 2 + rand() * 10;
+      x.fillRect(rand() * 256, rand() * 256, r, r);
+    }
+    const tex = new THREE.CanvasTexture(cv);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+    tex.generateMipmaps = true;
+    tex.minFilter = THREE.LinearMipmapLinearFilter;
+    return (this._fallbackTex = tex);
+  }
+
+  /** 拉取影像：成功返回 ImageBitmap；404 返回 'missing'；网络/上游故障返回 null（连续失败后暂停请求一段时间） */
+  async fetchImagery(tile) {
+    if (performance.now() < this.imgDownUntil) return null;
+    try {
+      const res = await fetch(`tiles/img/${tile.z}/${tile.x}/${tile.y}`);
+      if (res.status === 404) return 'missing';
+      if (!res.ok) throw new Error(`img ${res.status}`);
+      const bmp = await createImageBitmap(await res.blob(), { imageOrientation: 'none' });
+      this.imgFails = 0;
+      return bmp;
+    } catch {
+      if (++this.imgFails >= 4) this.imgDownUntil = performance.now() + 60000;
+      return null;
+    }
+  }
+
+  imageryTexture(bmp) {
+    const tex = new THREE.Texture(bmp);
+    tex.flipY = false;
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.anisotropy = this.anisotropy;
+    tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
+    tex.minFilter = THREE.LinearMipmapLinearFilter;
+    tex.generateMipmaps = true;
+    tex.needsUpdate = true;
+    return tex;
+  }
+
   async loadTile(tile) {
     tile.state = 'loading';
     this.inflight++;
     try {
       const m = this.demFor(tile.z, tile.x, tile.y);
       const demP = this.loadDem(m.dz, m.dx, m.dy);
-      const res = await fetch(`tiles/img/${tile.z}/${tile.x}/${tile.y}`);
-      if (tile.state === 'disposed') return;
-      if (!res.ok) {
-        tile.state = 'failed';
-        if (tile.parent) tile.parent.noSplit = true;
+      const img = await this.fetchImagery(tile);
+      if (tile.state === 'disposed') {
+        if (img && img !== 'missing') img.close();
         return;
       }
-      const bmp = await createImageBitmap(await res.blob(), { imageOrientation: 'none' });
+      // 该级别确实没有影像：停在父级（根瓦片仍需降级显示，否则整片地面缺失）
+      if (img === 'missing' && tile.parent) {
+        tile.state = 'failed';
+        tile.parent.noSplit = true;
+        return;
+      }
       const dem = await demP;
       if (tile.state === 'disposed') {
-        bmp.close();
+        if (img && img !== 'missing') img.close();
         return;
       }
-      const tex = new THREE.Texture(bmp);
-      tex.flipY = false;
-      tex.colorSpace = THREE.SRGBColorSpace;
-      tex.anisotropy = this.anisotropy;
-      tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
-      tex.minFilter = THREE.LinearMipmapLinearFilter;
-      tex.generateMipmaps = true;
-      tex.needsUpdate = true;
+      const real = img && img !== 'missing';
+      const tex = real ? this.imageryTexture(img) : this.fallbackTexture();
       const mat = new THREE.MeshLambertMaterial({ map: tex, emissiveMap: tex, color: this.matDiffuse, emissive: this.matEmissive });
       const mesh = new THREE.Mesh(this.buildGeometry(tile, dem), mat);
       mesh.receiveShadow = tile.z >= 13;
@@ -300,11 +351,38 @@ export class TerrainEngine {
       mesh.renderOrder = -10 + tile.z * 0.01;
       mesh.userData.tile = tile;
       tile.mesh = mesh;
-      tile.texture = tex;
+      tile.texture = real ? tex : null;
+      // 降级瓦片：影像恢复后再尝试替换（'missing' 的根瓦片不再重试）
+      tile.retryAt = real || img === 'missing' ? 0 : performance.now() + 30000;
       this.group.add(mesh);
       tile.state = 'ready';
     } catch (e) {
       if (tile.state !== 'disposed') tile.state = 'failed';
+    } finally {
+      this.inflight--;
+    }
+  }
+
+  /** 降级瓦片换上真实影像 */
+  async upgradeTile(tile) {
+    tile.retryAt = Infinity;
+    this.inflight++;
+    try {
+      const img = await this.fetchImagery(tile);
+      if (tile.state === 'disposed' || !tile.mesh) {
+        if (img && img !== 'missing') img.close();
+        return;
+      }
+      if (!img || img === 'missing') {
+        tile.retryAt = img ? 0 : performance.now() + 30000;
+        return;
+      }
+      const tex = this.imageryTexture(img);
+      tile.mesh.material.map = tex;
+      tile.mesh.material.emissiveMap = tex;
+      tile.mesh.material.needsUpdate = true;
+      tile.texture = tex;
+      tile.retryAt = 0;
     } finally {
       this.inflight--;
     }
@@ -362,8 +440,15 @@ export class TerrainEngine {
     const wanted = [];
     let visible = 0;
     let maxZ = 0;
+    let fallback = 0;
+    const upgrades = [];
+    const now = performance.now();
     const show = (t) => {
       if (!t.mesh) return;
+      if (t.retryAt) {
+        fallback++;
+        if (now > t.retryAt && now > this.imgDownUntil) upgrades.push(t);
+      }
       t.mesh.visible = true;
       t.lastUsed = this.frameNo;
       visible++;
@@ -410,11 +495,16 @@ export class TerrainEngine {
       if (this.inflight >= this.maxInflight) break;
       if (t.state === 'new') this.loadTile(t);
     }
+    for (const t of upgrades) {
+      if (this.inflight >= this.maxInflight) break;
+      this.upgradeTile(t);
+    }
     // 回收长时间未使用的子树
     if (this.frameNo % 60 === 0) this.gc();
     this.stats.visible = visible;
     this.stats.loading = this.inflight + wanted.length;
     this.stats.maxZ = maxZ;
+    this.stats.fallback = fallback;
     return this.stats;
   }
 
@@ -492,6 +582,7 @@ export class TerrainEngine {
       r.disposeChildren();
       r.dispose();
     }
+    this._fallbackTex?.dispose();
     this.group.parent?.remove(this.group);
   }
 }

@@ -124,7 +124,10 @@ function makeFacade(style, size, seed) {
         a.fill();
       }
       // 夜景亮窗
-      if (rand() < style.litP) {
+      // 亮灯纹理画满所有窗户，是否有人由着色器按楼、按窗随机决定（避免同一张贴图的亮窗图案在全城重复）。
+      // 保留原先的亮灯抽样以免打乱随机序列、改变白天立面的阳台/空调布局
+      rand();
+      {
         const col = style.litCol[Math.floor(rand() * style.litCol.length)];
         const gl = l.createLinearGradient(0, wy, 0, wy + wh);
         gl.addColorStop(0, col);
@@ -211,12 +214,22 @@ export class FacadeLibrary {
       const night = this.nightUniform;
       m.onBeforeCompile = (sh) => {
         sh.uniforms.uNight = night;
+        sh.uniforms.uCells = { value: new THREE.Vector2(style.cols, style.rows) };
+        sh.uniforms.uLitP = { value: style.litP };
         sh.vertexShader = sh.vertexShader
           .replace('#include <common>', '#include <common>\nattribute float aLit;\nvarying float vLit;')
           .replace('#include <begin_vertex>', '#include <begin_vertex>\nvLit = aLit;');
         sh.fragmentShader = sh.fragmentShader
-          .replace('#include <common>', '#include <common>\nuniform float uNight;\nvarying float vLit;')
-          .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\ntotalEmissiveRadiance *= uNight * vLit * 4.0;');
+          .replace('#include <common>', '#include <common>\nuniform float uNight, uLitP;\nuniform vec2 uCells;\nvarying float vLit;')
+          .replace(
+            '#include <emissivemap_fragment>',
+            `#include <emissivemap_fragment>
+            // 逐窗是否亮灯：窗格索引 + 楼栋随机量（vLit）哈希；暗楼亮窗少，亮楼亮窗多
+            vec2 cell = floor(vEmissiveMapUv * uCells);
+            float hsh = fract(sin(dot(cell + vec2(vLit * 97.0, vLit * 131.0), vec2(12.9898, 78.233))) * 43758.5453);
+            float occ = step(hsh, uLitP * (0.45 + 0.7 * vLit));
+            totalEmissiveRadiance *= uNight * vLit * occ * 2.0;`,
+          );
       };
       m.customProgramCacheKey = () => `facade-${style.id}`;
       return m;

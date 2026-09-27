@@ -69,8 +69,8 @@ export class PostFX {
   /** 按夜景程度与运镜状态调整风格 */
   setLook({ night = 0, cinematic = false, warmth = 0 }) {
     const u = this.grade.uniforms;
-    this.bloom.strength = 0.18 + night * 0.9;
-    this.bloom.threshold = night > 0.5 ? 0.45 : 0.92;
+    this.bloom.strength = 0.18 + night * 0.52;
+    this.bloom.threshold = night > 0.5 ? 0.6 : 0.92;
     u.uContrast.value = cinematic ? 1.12 : 1.05;
     u.uSaturation.value = (cinematic ? 1.12 : 1.06) - night * 0.15;
     u.uVignette.value = cinematic ? 0.42 : 0.22;

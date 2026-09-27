@@ -203,7 +203,8 @@ function build(data, { lon0, lat0, dem, exclusions }) {
     const t = WALL_TINTS[Math.floor(rand() * WALL_TINTS.length)];
     const shade = 0.8 + rand() * 0.2;
     const tint = [t[0] * shade, t[1] * shade, t[2] * shade];
-    const lit = rand() < 0.12 ? 0.15 : 0.6 + rand() * 0.4;
+    // 楼栋亮灯程度：约两成基本熄灯（办公楼下班、空置），其余明暗不一
+    const lit = rand() < 0.2 ? 0.08 + rand() * 0.1 : 0.35 + rand() * 0.65;
     const y0 = b.mh || 0;
     const y1 = Math.max(y0 + 2, b.h);
     const wb = walls[style];

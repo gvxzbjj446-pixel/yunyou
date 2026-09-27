@@ -79,6 +79,10 @@ const imgLimiter = new Limiter(12);
 const demLimiter = new Limiter(6);
 const IMG_HOSTS = ['https://server.arcgisonline.com', 'https://services.arcgisonline.com'];
 let imgHost = 0;
+// 熔断：上游连续网络故障后暂停请求 60 秒并快速返回 503，避免成千上万个预取任务排队重试、拖住浏览器的实时请求
+const breaker = { img: { fails: 0, until: 0 }, dem: { fails: 0, until: 0 } };
+const BREAK_AFTER = 6;
+const BREAK_MS = 60000;
 
 async function getTile(kind, z, x, y, priority = 0) {
   const ext = kind === 'img' ? 'jpg' : 'png';
@@ -86,7 +90,10 @@ async function getTile(kind, z, x, y, priority = 0) {
   const hit = await cache.read(file);
   if (hit) return hit;
   if (await cache.exists(`${file}.miss`)) throw new HttpError(404, 'no tile');
+  const br = breaker[kind];
+  if (Date.now() < br.until) throw new HttpError(503, `${kind} upstream unavailable`);
   return dedupe(`${kind}/${z}/${x}/${y}`, async () => {
+    if (Date.now() < br.until) throw new HttpError(503, `${kind} upstream unavailable`);
     const limiter = kind === 'img' ? imgLimiter : demLimiter;
     const buf = await limiter.run(
       () =>
@@ -101,14 +108,19 @@ async function getTile(kind, z, x, y, priority = 0) {
             if (!res.ok) throw new HttpError(res.status, `${kind} ${res.status}`);
             return Buffer.from(await res.arrayBuffer());
           },
-          { tries: 3, baseDelay: 400, shouldRetry: (e) => e.status !== 404 },
+          { tries: 3, baseDelay: 400, shouldRetry: (e) => e.status !== 404 && Date.now() >= br.until },
         ),
       priority,
     );
+    br.fails = 0;
     await cache.write(file, buf);
     return buf;
   }).catch(async (e) => {
     if (e.status === 404) await cache.write(`${file}.miss`, Buffer.alloc(0));
+    else if (Date.now() >= br.until && ++br.fails >= BREAK_AFTER) {
+      br.until = Date.now() + BREAK_MS;
+      console.warn(`[${kind}] upstream failing (${e.message}); pausing requests for ${BREAK_MS / 1000}s`);
+    }
     throw e;
   });
 }
@@ -387,7 +399,7 @@ async function handle(req, res) {
     await cache.write(cache.path('snaps', `${m[1].replace(/\.png$/, '')}.png`), Buffer.concat(chunks));
     return sendJson(req, res, { ok: true });
   }
-  if (p === '/api/health') return sendJson(req, res, { ok: true, img: imgLimiter.pending, dem: demLimiter.pending, overpass: overpassHealth() });
+  if (p === '/api/health') return sendJson(req, res, { ok: true, img: imgLimiter.pending, dem: demLimiter.pending, imgDown: Math.max(0, breaker.img.until - Date.now()), demDown: Math.max(0, breaker.dem.until - Date.now()), overpass: overpassHealth() });
 
   if (p.startsWith('/vendor/three/')) {
     const rel = p.slice('/vendor/three/'.length);

@@ -96,6 +96,7 @@ class App {
     this.landmarks = w.addLayer(new LandmarkLayer({ scene: w.scene, frame: w.frame, terrain: w.terrain, renderer: w.renderer }));
     this.features = w.addLayer(new FeatureLayer({ scene: w.scene, frame: w.frame, terrain: w.terrain, blocked: (x, z) => !!this.buildings?.buildingAt(x, z) || !!this.landmarks?.collidersNear(x, z, 0).some((f) => pointInPolygon(x, z, f.ring)) }));
     w.collider = (from, to, r) => this.collide(from, to, r);
+    w.rig.clearance = (x, z) => this.obstacleTop(x, z, 12);
     w.setTime(10);
     this.applyWeather(city);
 
@@ -321,12 +322,74 @@ class App {
   // ================================================================ 景点
   spotPose(lm, kind) {
     const s = this.spots.get(lm.id);
+    let pose;
     if (kind === 'view') {
       const v = lm.view || { distance: 900, heading: 200, pitch: 28 };
-      return { target: s.pos.clone().add(new THREE.Vector3(0, lm.height * 0.3, 0)), distance: v.distance, heading: v.heading * D2R, pitch: v.pitch * D2R };
+      pose = { target: s.pos.clone().add(new THREE.Vector3(0, lm.height * 0.3, 0)), distance: v.distance, heading: v.heading * D2R, pitch: v.pitch * D2R };
+    } else {
+      const o = lm.orbit || { radius: 350, height: 180 };
+      pose = { target: s.pos.clone().add(new THREE.Vector3(0, lm.height * 0.35, 0)), distance: Math.hypot(o.radius, o.height), heading: (lm.view?.heading ?? 20) * D2R, pitch: Math.atan2(o.height, o.radius) };
     }
-    const o = lm.orbit || { radius: 350, height: 180 };
-    return { target: s.pos.clone().add(new THREE.Vector3(0, lm.height * 0.35, 0)), distance: Math.hypot(o.radius, o.height), heading: (lm.view?.heading ?? 20) * D2R, pitch: Math.atan2(o.height, o.radius) };
+    return this.clearPose(pose, lm);
+  }
+
+  /**
+   * 景点机位避障：优先保持预设朝向，其次小幅改朝向/抬高俯角，
+   * 直到机位不在楼里、且机位到景点主体的视线不被其他建筑挡住。建筑未加载时原样返回。
+   */
+  clearPose(pose, lm) {
+    const rig = this.world.rig;
+    const s = this.spots.get(lm.id);
+    const aim = s.pos.clone().add(new THREE.Vector3(0, lm.height * 0.45, 0));
+    const reach = pose.distance + 40;
+    const near = (this.buildings?.footprintsNear(aim.x, aim.z, reach) || []).filter((f) => Math.hypot(Math.max(f.minx - aim.x, 0, aim.x - f.maxx), Math.max(f.minz - aim.z, 0, aim.z - f.maxz)) < reach);
+    if (!near.length) return pose;
+    const topAt = (x, z, r) => {
+      let top = -Infinity;
+      for (const f of near) {
+        if (f.top <= top || x < f.minx - r || x > f.maxx + r || z < f.minz - r || z > f.maxz + r) continue;
+        if (pointInPolygon(x, z, f.ring)) top = f.top;
+        else {
+          const g = f.ring;
+          for (let i = 0, j = g.length - 1; i < g.length; j = i++) if (distToSegment(x, z, g[j][0], g[j][1], g[i][0], g[i][1]) < r) { top = f.top; break; }
+        }
+      }
+      return top;
+    };
+    // 景点自身周围（模型/广场）不参与遮挡判断
+    const ignoreR = Math.max(25, lm.height * 0.5);
+    const blocked = (p) => {
+      let n = topAt(p.x, p.z, 10) > p.y - 6 ? 50 : 0;
+      const steps = Math.max(8, Math.min(48, Math.round(p.distanceTo(aim) / 10)));
+      for (let i = 1; i < steps; i++) {
+        const t = i / steps;
+        const x = p.x + (aim.x - p.x) * t;
+        const z = p.z + (aim.z - p.z) * t;
+        if (Math.hypot(x - aim.x, z - aim.z) < ignoreR) continue;
+        if (topAt(x, z, 3) > p.y + (aim.y - p.y) * t) n++;
+      }
+      return n;
+    };
+    const cands = [];
+    for (let k = -9; k <= 9; k++) for (let j = 0; j <= 5; j++) cands.push({ k, j, cost: Math.abs(k) + j * 1.5 });
+    cands.sort((a, b) => a.cost - b.cost);
+    let best = null;
+    for (const c of cands) {
+      const cand = { ...pose, heading: pose.heading + c.k * 20 * D2R, pitch: Math.min(1.25, pose.pitch + c.j * 0.1) };
+      const n = blocked(rig.orbitPose(cand).pos);
+      if (n === 0) return cand;
+      if (!best || n < best.n) best = { n, cand };
+    }
+    return best.cand;
+  }
+
+  /** 飞抵后建筑多已加载完毕：再校正一次机位 */
+  refineSpotPose(lm, kind) {
+    const rig = this.world.rig;
+    if (rig.mode !== 'orbit' || (kind === 'view' && this.panel.lm !== lm)) return;
+    const p = this.spotPose(lm, kind);
+    const g = rig.orbitGoal;
+    if (Math.abs(p.heading - g.heading) > 1e-3 || Math.abs(p.pitch - g.pitch) > 1e-3) Object.assign(g, { heading: p.heading, pitch: p.pitch });
   }
 
   openLandmark(id) {
@@ -342,7 +405,7 @@ class App {
     const w = this.world;
     if (w.rig.mode === 'walk' || w.rig.mode === 'drone') w.rig.setMode('orbit');
     this.setModeUI('orbit');
-    w.rig.flyToOrbit(this.spotPose(lm, 'view'));
+    w.rig.flyToOrbit(this.spotPose(lm, 'view')).then(() => this.refineSpotPose(lm, 'view'));
   }
 
   startExploringQuiet() {
@@ -358,10 +421,11 @@ class App {
     w.rig.autoRotate = 0;
     if (act === 'fly') {
       this.setModeUI('orbit');
-      w.rig.flyToOrbit(this.spotPose(lm, 'view'));
+      w.rig.flyToOrbit(this.spotPose(lm, 'view')).then(() => this.refineSpotPose(lm, 'view'));
     } else if (act === 'orbit') {
       this.setModeUI('orbit');
       w.rig.flyToOrbit(this.spotPose(lm, 'orbit')).then(() => {
+        this.refineSpotPose(lm, 'orbit');
         w.rig.autoRotate = 0.12;
         w.rig.idleTime = 100;
         this.toast('环绕欣赏中 · 拖动鼠标可随时接管');

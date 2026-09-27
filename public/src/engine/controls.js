@@ -18,6 +18,8 @@ export class CameraRig extends EventTarget {
     this.groundAt = groundAt; // (x,z) → 地面高度
     this.rayGround = rayGround; // (origin, dir) → Vector3 | null
     this.collide = collide; // (from, to, radius) → 修正后的位置
+    this.clearance = null; // (x, z) → 该点附近最高建筑顶面，航拍近距离避让用
+    this.orbitLift = 0;
     this.mode = 'orbit';
     this.enabled = true;
     // 航拍状态（目标值 + 平滑后的当前值）
@@ -298,6 +300,12 @@ export class CameraRig extends EventTarget {
     o.heading += dh * (1 - Math.exp(-L * dt));
     o.pitch = damp(o.pitch, g.pitch, L, dt);
     const pose = this.orbitPose(o);
+    // 近距离航拍不穿楼：机位附近有建筑时平滑抬升（只改高度，视线仍对准目标），离开后缓慢回落
+    if (this.clearance && o.distance < 4000) {
+      const need = Math.max(0, this.clearance(pose.pos.x, pose.pos.z) + 10 - pose.pos.y);
+      this.orbitLift = need > this.orbitLift ? Math.max(need - 2, damp(this.orbitLift, need, 12, dt)) : damp(this.orbitLift, need, 1.5, dt);
+      pose.pos.y += this.orbitLift;
+    } else this.orbitLift = 0;
     // 相机不钻地
     const gy = this.groundAt(pose.pos.x, pose.pos.z) + 4;
     if (pose.pos.y < gy) pose.pos.y = gy;

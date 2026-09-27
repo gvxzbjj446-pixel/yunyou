@@ -44,7 +44,7 @@ function erqiTower(kit) {
     x.fillRect(0, 0, w * 0.06, h);
     x.fillRect(w * 0.94, 0, w * 0.06, h);
   });
-  const wallMat = kit.glow(new THREE.MeshStandardMaterial({ map: wallTex, roughness: 0.75, emissive: new THREE.Color('#ffcf7a'), emissiveMap: wallTex, emissiveIntensity: 0 }), 0.35);
+  const wallMat = kit.glow(new THREE.MeshStandardMaterial({ map: wallTex, roughness: 0.75, emissive: new THREE.Color('#ffcf7a'), emissiveMap: wallTex, emissiveIntensity: 0 }), 0.8);
   const tiles = kit.glazedTiles('#2e8a57', 'erqi-green');
   const fasciaMat = kit.paint('#8f2b22', 'erqi-fascia', 0.6);
   const marble = kit.stone('#eeeae2', 'marble');

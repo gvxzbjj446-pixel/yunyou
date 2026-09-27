@@ -67,7 +67,7 @@ export class FeatureLayer {
     this.tiles = new Map();
     this.inflight = 0;
     this.night = 0;
-    this.lampMat = new THREE.PointsMaterial({ size: 9, map: glowSprite(), color: 0xffc27a, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, sizeAttenuation: true, opacity: 0, fog: true });
+    this.lampMat = new THREE.PointsMaterial({ size: 6, map: glowSprite(), color: 0xffc27a, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, sizeAttenuation: true, opacity: 0, fog: true });
     this.roadMat = new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false });
     this.treeGeo = treeGeometry();
     this.treeMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95 });
