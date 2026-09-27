@@ -7,7 +7,7 @@ Overture 的 buildings / transportation 主题保留了 OSM 要素 id（sources[
 processBuildings / processFeatures 按现有规则清洗、估高。
 
 输出：<cache>/osm/raw-b14/<x>_<y>.json.gz 与 raw-f14（与 server.mjs 的 rawOverpass 同格式）。
-已存在的原始缓存会被覆盖，请勿对生产缓存目录运行。
+已存在的原始缓存会被覆盖（相邻范围请合并成一个 bbox 一次生成，分次运行会覆盖交界瓦片），请勿对生产缓存目录运行。
 
 依赖：pip install pyarrow shapely
 用法：python3 tools/overture-osm-cache.py --bbox 113.55,34.70,113.80,34.82 [--cache cache] [--release 2026-09-23.0]
@@ -206,7 +206,12 @@ def road_elements(row):
     return out
 
 
-def write(cache, kind, tiles, release):
+def write(cache, kind, tiles, release, bbox):
+    # 范围内没有要素的瓦片也写空结果，离线时不再回落到 Overpass
+    (x0, y1), (x1, y0) = tile_of(bbox[0], bbox[1]), tile_of(bbox[2], bbox[3])
+    for x in range(x0, x1 + 1):
+        for y in range(y0, y1 + 1):
+            tiles.setdefault((x, y), [])
     d = os.path.join(cache, 'osm', f'raw-{kind}{Z}')
     os.makedirs(d, exist_ok=True)
     for (x, y), els in tiles.items():
@@ -229,13 +234,13 @@ def main():
             r = building_element(row, part)
             if r:
                 tiles.setdefault(r[0], []).append(r[1])
-    write(a.cache, 'b', tiles, a.release)
+    write(a.cache, 'b', tiles, a.release, bbox)
     if not a.no_roads:
         tiles = {}
         for row in read_theme(a.release, 'theme=transportation/type=segment', bbox):
             for k, el in road_elements(row):
                 tiles.setdefault(k, []).append(el)
-        write(a.cache, 'f', tiles, a.release)
+        write(a.cache, 'f', tiles, a.release, bbox)
 
 
 if __name__ == '__main__':

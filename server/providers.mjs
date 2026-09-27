@@ -167,6 +167,7 @@ export async function fetchGuide(city, cityEn) {
     ['zh', city],
     ['en', cityEn],
   ].filter(([, t]) => t);
+  let failure = null;
   for (const [lang, title] of tries) {
     try {
       const url = `https://${lang}.wikivoyage.org/w/api.php?action=parse&format=json&formatversion=2&redirects=1&prop=wikitext&page=${encodeURIComponent(title)}`;
@@ -183,9 +184,14 @@ export async function fetchGuide(city, cityEn) {
         sections,
       };
     } catch (e) {
-      if (e.status !== 404) console.warn('[guide]', lang, title, e.message);
+      if (e.status !== 404) {
+        console.warn('[guide]', lang, title, e.message);
+        failure = e;
+      }
     }
   }
+  // 上游故障不能当作“没有攻略”写入 7 天缓存：抛出让本次请求失败、下次重试
+  if (failure) throw new HttpError(failure.status >= 500 ? failure.status : 502, `guide upstream: ${failure.message}`);
   return { source: null, sections: [] };
 }
 

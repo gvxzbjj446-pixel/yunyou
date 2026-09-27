@@ -33,16 +33,30 @@ const guideCache = new Map();
 export function loadGuide(city) {
   const key = `${city.guide?.city}|${city.guide?.en}`;
   if (!guideCache.has(key)) {
-    const p = api(`api/guide?city=${encodeURIComponent(city.guide?.city || city.name)}&en=${encodeURIComponent(city.guide?.en || city.en || '')}`).catch((e) => ({ error: e.message, sections: [] }));
+    // 失败结果不留在缓存里，下次打开时重试
+    const p = api(`api/guide?city=${encodeURIComponent(city.guide?.city || city.name)}&en=${encodeURIComponent(city.guide?.en || city.en || '')}`).catch((e) => {
+      guideCache.delete(key);
+      return { error: e.message, sections: [] };
+    });
     guideCache.set(key, p);
   }
   return guideCache.get(key);
 }
 const weatherCache = new Map();
 export function loadWeather(city) {
-  if (!weatherCache.has(city.id)) weatherCache.set(city.id, api(`api/weather?lat=${city.center[1]}&lon=${city.center[0]}`).catch(() => null));
+  if (!weatherCache.has(city.id))
+    weatherCache.set(
+      city.id,
+      api(`api/weather?lat=${city.center[1]}&lon=${city.center[0]}`).catch(() => {
+        weatherCache.delete(city.id);
+        return null;
+      }),
+    );
   return weatherCache.get(city.id);
 }
+
+/** 第三方服务故障的用户提示（原始错误放在 title 里便于排查） */
+const failNote = (what, err) => `<p class="muted" title="${h(err || '')}">${what}暂时无法连接第三方数据源，请稍后重试。</p>`;
 
 function renderSection(s) {
   const paras = (s.text || '')
@@ -164,8 +178,10 @@ export class LandmarkPanel {
     if (secs.length) {
       html += `<h4 style="margin-top:22px">${h(this.city.name)} 城市攻略</h4>` + secs.slice(0, 12).map(renderSection).join('');
       html += `<div class="src">来源：<a href="${h(g.url)}" target="_blank" rel="noopener">${h(g.source)}</a> · ${h(g.license)}，内容由社区编辑，可能有过时之处。</div>`;
-    } else html += `<p class="muted">暂未获取到该城市的第三方攻略${g.error ? `（${h(g.error)}）` : ''}。</p>`;
+    } else html += g.error ? `${failNote('城市攻略', g.error)}<button class="retry">重试</button>` : '<p class="muted">暂未收录该城市的第三方攻略。</p>';
     body.innerHTML = html;
+    const retry = body.querySelector('.retry');
+    if (retry) retry.onclick = () => ((this.guideDone = false), this.renderGuide());
   }
 
   async renderNearby() {
@@ -178,7 +194,7 @@ export class LandmarkPanel {
     try {
       data = await api(`api/pois?lat=${lm.lat}&lon=${lm.lon}&r=1000`);
     } catch (e) {
-      if (this.lm === lm) body.innerHTML = `<p class="muted">周边店铺查询失败：${h(e.message)}</p><button class="retry">重试</button>`;
+      if (this.lm === lm) body.innerHTML = `${failNote('周边店铺', e.message)}<button class="retry">重试</button>`;
       const b = body.querySelector('.retry');
       if (b) b.onclick = () => ((this.nearbyDone = false), this.renderNearby());
       return;
@@ -242,7 +258,7 @@ export class GuideDrawer {
         .join('')}`;
     }
     if (!g.sections?.length) {
-      body.innerHTML = `<p>${h(city.desc || '')}</p><p class="muted">暂未获取到第三方攻略${g.error ? `（${h(g.error)}）` : ''}。</p>`;
+      body.innerHTML = `<p>${h(city.desc || '')}</p>${g.error ? failNote('城市攻略', g.error) : '<p class="muted">暂未收录该城市的第三方攻略。</p>'}`;
       return;
     }
     const toc = g.sections.filter((s) => s.level === 2).map((s) => `<button data-t="${h(s.title)}">${h(s.title)}</button>`).join('');

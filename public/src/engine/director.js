@@ -24,9 +24,10 @@ export class Director extends EventTarget {
     this.current = -1;
     this.lift = 0;
     this.clearance = null; // (x, z) → 该点附近最高障碍物顶面高度
+    this.sightClearance = null; // (x, z, r) → 不含景点模型的最高建筑顶面（视线避障）
   }
 
-  /** 前瞻避障：当前与未来 1.5 s 机位下方的最高楼顶 */
+  /** 前瞻避障：当前与未来 1.5 s 机位下方的最高楼顶；有景点的镜头再保证视线不被楼挡住 */
   neededLift(t) {
     if (!this.clearance) return 0;
     let need = 0;
@@ -35,8 +36,34 @@ export class Director extends EventTarget {
       const p = this.pose(shot, u);
       const top = this.clearance(p.pos.x, p.pos.z);
       need = Math.max(need, top + 22 - p.pos.y);
+      if (shot.spot && this.sightClearance && (dtA === 0 || dtA === 1)) need = Math.max(need, this.sightLift(p.pos, p.look));
     }
     return Math.max(0, need);
+  }
+
+  /**
+   * 视线避障：机位到注视点之间若有楼顶高于视线，求使视线越过楼顶（+6 m）所需的最小抬升。
+   * 注视点附近（景点自身及广场）及最后 1/4 视线不计；抬升上限 220 m，避免镜头语言被彻底改变。
+   */
+  sightLift(pos, look) {
+    const dist = Math.hypot(look.x - pos.x, look.z - pos.z);
+    if (dist < 60) return 0;
+    const ignore = Math.min(60, dist * 0.3);
+    let need = 0;
+    const n = 12;
+    for (let i = 1; i < n; i++) {
+      const t = i / n;
+      const x = pos.x + (look.x - pos.x) * t;
+      const z = pos.z + (look.z - pos.z) * t;
+      // 紧挨主体的楼只造成局部前景遮挡；按 1/(1−t) 放大的抬升代价太大，只检查前 3/4 视线
+      if (dist * (1 - t) < ignore || t > 0.75) break;
+      const top = this.sightClearance(x, z, 4);
+      if (!Number.isFinite(top)) continue;
+      // 抬升后机位高度 y' 需满足 y' + (look.y - y') t ≥ top + 6
+      const yNeed = (top + 6 - look.y * t) / (1 - t);
+      need = Math.max(need, yNeed - pos.y);
+    }
+    return Math.min(220, need);
   }
 
   local(lon, lat, agl) {

@@ -139,6 +139,8 @@ class App {
     }));
     this.director = new Director(w, city, shots, this.spots);
     this.director.clearance = (x, z) => this.obstacleTop(x, z);
+    // 视线避障只看普通建筑：景点模型本身就是镜头主体
+    this.director.sightClearance = (x, z, r) => this.obstacleTop(x, z, r, false);
     this.bindDirector(this.director);
 
     // 起始机位：城市上空
@@ -497,7 +499,7 @@ class App {
   }
 
   /** 某点 30 m 范围内最高建筑/地标顶面（用于运镜避障） */
-  obstacleTop(x, z, r = 30) {
+  obstacleTop(x, z, r = 30, withLandmarks = true) {
     let top = -Infinity;
     const test = (f) => {
       if (f.top <= top) return;
@@ -506,7 +508,7 @@ class App {
       for (let i = 0, j = g.length - 1; i < g.length; j = i++) if (distToSegment(x, z, g[j][0], g[j][1], g[i][0], g[i][1]) < r) return (top = f.top);
     };
     for (const f of this.buildings?.footprintsNear(x, z, r) || []) test(f);
-    for (const f of this.landmarks?.collidersNear(x, z, r) || []) test(f);
+    if (withLandmarks) for (const f of this.landmarks?.collidersNear(x, z, r) || []) test(f);
     return top;
   }
 
