@@ -278,7 +278,7 @@ export class CityPicker {
     grid.innerHTML = cities
       .map(
         (c) =>
-          `<button class="city-card" data-id="${c.id}" style="background:${c.cover || '#222'}">${c.id === 'zhengzhou' ? '<i class="badge">默认 · 精细建模</i>' : c.id === 'puyang' ? '<i class="badge">精细建模 · 五县一区</i>' : ''}<span><b>${h(c.name)}</b><small>${h(c.slogan || '')}</small></span></button>`,
+          `<button class="city-card" data-id="${c.id}" style="background:${c.cover || '#222'}">${c.id === 'puyang' ? '<i class="badge">默认 · 五县一区精细建模</i>' : c.id === 'zhengzhou' ? '<i class="badge">精细建模</i>' : ''}<span><b>${h(c.name)}</b><small>${h(c.slogan || '')}</small></span></button>`,
       )
       .join('');
     grid.querySelectorAll('.city-card').forEach((b) => (b.onclick = () => (this.close(), onPick({ preset: b.dataset.id }))));

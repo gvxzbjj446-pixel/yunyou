@@ -1,5 +1,5 @@
 // 预热：按城市配置把建筑/道路 z14 瓦片提前拉进服务端缓存（公共 Overpass 常过载，懒加载不可靠）。
-// 用法：node tools/prewarm.mjs [--base http://127.0.0.1:8720/] [--city zhengzhou,all] [--conc 2] [--features]
+// 用法：node tools/prewarm.mjs [--base http://127.0.0.1:8720/] [--city puyang,zhengzhou,all] [--conc 2] [--features]
 import { PRESET_CITIES } from '../public/src/data/cities.js';
 import { lonLatToTile } from '../public/src/core/geo.js';
 
@@ -9,7 +9,7 @@ const arg = (k, d) => {
   return i >= 0 ? argv[i + 1] : d;
 };
 const BASE = arg('base', 'http://127.0.0.1:8720/').replace(/\/?$/, '/');
-const CITIES = arg('city', 'zhengzhou');
+const CITIES = arg('city', 'puyang');
 const CONC = +arg('conc', 2);
 const WITH_F = argv.includes('--features');
 const Z = 14;
@@ -29,7 +29,7 @@ function tilesFor(city) {
   };
   for (const l of city.landmarks) add(l.lon, l.lat, 1.6, 0);
   for (const s of city.cinematic || []) for (const p of [...(s.pos || []), ...(s.look || [])]) add(p[0], p[1], 0.8, 1);
-  add(city.center[0], city.center[1], city.id === 'zhengzhou' ? 7 : 3, 2);
+  add(city.center[0], city.center[1], ['zhengzhou', 'puyang'].includes(city.id) ? 7 : 3, 2);
   return [...set.entries()].sort((a, b) => a[1] - b[1]).map(([k]) => k);
 }
 
