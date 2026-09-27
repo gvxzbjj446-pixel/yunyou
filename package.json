@@ -1,0 +1,16 @@
+{
+  "name": "cloud-tour-3d",
+  "version": "0.1.0",
+  "private": true,
+  "description": "云游中国 · 3D 全景沉浸式城市旅游体验（默认郑州）",
+  "type": "module",
+  "scripts": {
+    "start": "node server/server.mjs",
+    "dev": "node server/server.mjs --port 8720",
+    "prewarm": "node tools/prewarm.mjs",
+    "test": "node --test test/*.test.mjs"
+  },
+  "dependencies": {
+    "three": "0.186.1"
+  }
+}
