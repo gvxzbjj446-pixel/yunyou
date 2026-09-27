@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { Kit, prism, eave, cap, hall, pagoda, lathe, smoothProfile, rampart, rod, star5, canvasTexture, mergeGeometries, ensureCCW } from './modelkit.js';
 import { ZZ_GEO } from '../data/zhengzhou-geo.js';
 import { rng } from '../core/geo.js';
-import { elongation, centroid } from '../core/poly.js';
+import { elongation, centroid, pointInPolygon, distToSegment } from '../core/poly.js';
 
 const D2R = Math.PI / 180;
 
@@ -776,6 +776,16 @@ export class LandmarkLayer {
   }
   pickables() {
     return this.group.children;
+  }
+  /** 地标台基及外扩 20 m 的广场范围（不种行道树，保持地标底部通透） */
+  inPlaza(x, z) {
+    for (const f of this.footprints) {
+      if (x < f.minx - 20 || x > f.maxx + 20 || z < f.minz - 20 || z > f.maxz + 20) continue;
+      if (pointInPolygon(x, z, f.ring)) return true;
+      const g = f.ring;
+      for (let i = 0, j = g.length - 1; i < g.length; j = i++) if (distToSegment(x, z, g[j][0], g[j][1], g[i][0], g[i][1]) < 20) return true;
+    }
+    return false;
   }
   collidersNear(x, z, r) {
     return this.footprints.filter((f) => x > f.minx - r && x < f.maxx + r && z > f.minz - r && z < f.maxz + r);

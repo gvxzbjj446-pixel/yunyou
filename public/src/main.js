@@ -94,7 +94,7 @@ class App {
     this.buildings = w.addLayer(new BuildingLayer({ scene: w.scene, frame: w.frame, terrain: w.terrain, renderer: w.renderer, exclusions: exclusionsFor(models.map((m) => m.model), w.frame) }));
     this.buildings.setQuality(w.quality);
     this.landmarks = w.addLayer(new LandmarkLayer({ scene: w.scene, frame: w.frame, terrain: w.terrain, renderer: w.renderer }));
-    this.features = w.addLayer(new FeatureLayer({ scene: w.scene, frame: w.frame, terrain: w.terrain, blocked: (x, z) => !!this.buildings?.buildingAt(x, z) || !!this.landmarks?.collidersNear(x, z, 0).some((f) => pointInPolygon(x, z, f.ring)) }));
+    this.features = w.addLayer(new FeatureLayer({ scene: w.scene, frame: w.frame, terrain: w.terrain, blocked: (x, z) => !!this.buildings?.buildingAt(x, z) || !!this.landmarks?.inPlaza(x, z) || this.inViewCorridor(x, z) }));
     w.collider = (from, to, r) => this.collide(from, to, r);
     w.rig.clearance = (x, z) => this.obstacleTop(x, z, 12);
     w.setTime(10);
@@ -111,6 +111,14 @@ class App {
       }),
     );
     if (token !== this.loadToken) return;
+    // 漫游入口 → 景点的视线走廊（不种行道树，进入景点时地标不被遮挡）
+    this.viewCorridors = city.landmarks
+      .filter((l) => l.walk)
+      .map((l) => {
+        const a = w.frame.toLocal(l.walk.lon, l.walk.lat);
+        const b = this.spots.get(l.id).pos;
+        return [a.x, a.z, b.x, b.z];
+      });
     this.hotspots.set(
       city.landmarks.map((l) => {
         const s = this.spots.get(l.id);
@@ -496,6 +504,10 @@ class App {
     if (!blocked(p.x, from.z)) return new THREE.Vector3(p.x, p.y, from.z);
     if (!blocked(from.x, p.z)) return new THREE.Vector3(from.x, p.y, p.z);
     return from.clone();
+  }
+
+  inViewCorridor(x, z) {
+    return (this.viewCorridors || []).some(([ax, az, bx, bz]) => distToSegment(x, z, ax, az, bx, bz) < 8);
   }
 
   /** 某点 30 m 范围内最高建筑/地标顶面（用于运镜避障） */
