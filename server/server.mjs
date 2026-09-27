@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { gzipSync, gunzipSync } from 'node:zlib';
 import { createHash } from 'node:crypto';
 import { Limiter, fetchWithTimeout, retry, HttpError, DiskCache, dedupe } from './upstream.mjs';
-import { overpass, buildingsQuery, featuresQuery, processBuildings, processFeatures, fetchPoisOverpass, fetchAttractions, overpassHealth, RULES_VERSION } from './osm.mjs';
+import { overpass, buildingsQuery, featuresQuery, processBuildings, processFeatures, mergeSupplement, fetchPoisOverpass, fetchAttractions, overpassHealth, RULES_VERSION } from './osm.mjs';
 import { fetchGuide, fetchWikiSummary, fetchWeather, geocode, fetchPoisAmap } from './providers.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -158,8 +158,18 @@ async function rawOverpass(kind, z, x, y, priority = 0) {
     return data;
   });
 }
+/** 仓库内置的补充建筑轮廓（tools/overture-osm-cache.py --supplement 生成） */
+const SUPP_DIR = join(ROOT, 'data', 'buildings-supplement');
+async function supplementFor(z, x, y) {
+  try {
+    return JSON.parse(gunzipSync(await readFile(join(SUPP_DIR, String(z), `${x}_${y}.json.gz`))).toString('utf8'));
+  } catch {
+    return null;
+  }
+}
 async function processedCached(kind, z, x, y, priority) {
-  const file = cache.path('osm', `${kind}${z}-r${RULES_VERSION}`, `${x}_${y}.json.gz`);
+  const supp = kind === 'b' ? await supplementFor(z, x, y) : null;
+  const file = cache.path('osm', `${kind}${z}-r${RULES_VERSION}${supp ? 's' : ''}`, `${x}_${y}.json.gz`);
   const hit = await cache.read(file);
   if (hit) return hit;
   // 旧版道路缓存（道路按几何裁剪，不受质心问题影响）直接沿用
@@ -169,7 +179,7 @@ async function processedCached(kind, z, x, y, priority) {
   }
   return dedupe(`pc:${kind}${z}/${x}/${y}`, async () => {
     const raw = await rawOverpass(kind, z, x, y, priority);
-    const data = kind === 'b' ? processBuildings(raw, z, x, y) : processFeatures(raw, z, x, y);
+    const data = kind === 'b' ? processBuildings(mergeSupplement(raw, supp), z, x, y) : processFeatures(raw, z, x, y);
     const gz = gzipSync(Buffer.from(JSON.stringify(data)), { level: 7 });
     await cache.write(file, gz);
     return gz;

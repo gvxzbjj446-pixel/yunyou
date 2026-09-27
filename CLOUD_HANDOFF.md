@@ -68,6 +68,13 @@ node server/server.mjs --host 0.0.0.0 --port 8720
 
 测试脚本在无渲染的模拟时间下推进（`world.post.render` 置空后循环 `world.tick(1/30)`），SwiftShader 下每帧渲染约 3 s，按真实时间截止的 `settle()` 不适合验证飞行/动画结束状态。
 
+### 濮阳（五县一区，重点范县）
+
+- 城市配置 `public/src/data/puyang.js`：13 个景点覆盖华龙区、濮阳县、清丰、南乐、范县（县城、荷花生态园、黄河范县段、濮城镇）、台前；10 镜头 110 s 宣传片，范县三个镜头按“县城 → 荷塘 → 顺黄河东下”接台前将军渡落日。
+- 景点坐标全部取自 OSM / Overture 实测要素，地理数据 `public/src/data/puyang-geo.js`；模型 `public/src/engine/landmarks-puyang.js`（7 个）。剧院外立面、蚌塑放大展示为示意，已在介绍中说明。
+- 补充建筑：7 个县城区 8.7 万栋非 OSM 影像识别轮廓（3.8 MB，`data/buildings-supplement/14/`），服务端 `mergeSupplement` 合并，已处理缓存目录带 `s` 后缀；这类轮廓单独按县城分布估高（约 46% 1–3 层、43% 4–7 层、11% 高层），规则版本 7。
+- 验证：7 个模型全部加载、无页面错误；宣传片逐帧 0 遮挡、0 运行时抬升，最低净空 72 m；荷塘水位取园内地形最高处，避免被滩区地面遮住。线上需复查：黄河河面（来自影像）、浮桥与河道的对位。
+
 另：`package-lock.json` 的 `resolved` 由 npmmirror 改回 registry.npmjs.org（npm 会按各环境配置的 registry 替换，服务器上照常走镜像）。
 
 ## 下一步工作

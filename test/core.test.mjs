@@ -1,7 +1,7 @@
 // 纯函数回归测试：node --test test/
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { LocalFrame, lonLatToTile, tileBounds, wgs84ToGcj02, gcj02ToWgs84, haversine } from '../public/src/core/geo.js';
+import { LocalFrame, lonLatToTile, tileBounds, wgs84ToGcj02, gcj02ToWgs84, haversine, rng } from '../public/src/core/geo.js';
 import { centroid, signedArea, pointInPolygon, elongation } from '../public/src/core/poly.js';
 import { processBuildings, estimateHeight, joinRings } from '../server/osm.mjs';
 import { parseWikivoyage, cleanWikitext } from '../server/providers.mjs';
@@ -109,4 +109,52 @@ test('Wikivoyage 解析：章节、列表项与内联标记', () => {
   assert.equal(see.items[0].content, '馆藏丰富 贾湖骨笛');
   assert.equal(secs.find((s) => s.title === '用餐').text, '• 郑州烩面');
   assert.equal(cleanWikitext("[[File:x.jpg|缩略图|说明]]A[http://a.b 链接]'''B'''"), 'A链接B');
+});
+
+test('补充建筑：与 OSM 建筑重叠的轮廓被剔除，其余并入', async () => {
+  const { mergeSupplement } = await import('../server/osm.mjs');
+  const sq = (x, y, d) => [[x, y], [x + d, y], [x + d, y + d], [x, y + d], [x, y]].map(([lon, lat]) => ({ lon, lat }));
+  const osm = { elements: [{ type: 'way', id: 1, tags: { building: 'yes' }, geometry: sq(115, 35.8, 0.0003) }] };
+  const supp = {
+    elements: [
+      { type: 'way', id: 5e15 + 1, tags: { building: 'yes' }, geometry: sq(115.0001, 35.8001, 0.0001) }, // 在 OSM 楼内 → 剔除
+      { type: 'way', id: 5e15 + 2, tags: { building: 'yes' }, geometry: sq(115.001, 35.801, 0.0001) }, // 空地 → 保留
+    ],
+  };
+  const out = mergeSupplement(osm, supp);
+  assert.deepEqual(out.elements.map((e) => e.id), [1, 5e15 + 2]);
+  assert.equal(mergeSupplement(osm, null), osm);
+});
+
+test('补充建筑数据：每个瓦片的要素质心都落在该瓦片内，id 不与 OSM 冲突', async () => {
+  const { readdirSync, readFileSync } = await import('node:fs');
+  const { gunzipSync } = await import('node:zlib');
+  const dir = new URL('../data/buildings-supplement/14/', import.meta.url);
+  const files = readdirSync(dir);
+  assert.ok(files.length > 50);
+  for (const f of files.slice(0, 12)) {
+    const [x, y] = f.replace('.json.gz', '').split('_').map(Number);
+    const tb = tileBounds(14, x, y);
+    for (const el of JSON.parse(gunzipSync(readFileSync(new URL(f, dir)))).elements.slice(0, 200)) {
+      assert.ok(el.id >= 5e15 && el.id < 2 ** 53);
+      const g = el.geometry || el.members.find((m) => m.role === 'outer').geometry;
+      const [cx, cy] = centroid(g.map((p) => [p.lon, p.lat]));
+      assert.ok(cx >= tb.w - 1e-4 && cx <= tb.e + 1e-4 && cy >= tb.s - 1e-4 && cy <= tb.n + 1e-4, `${f} ${el.id}`);
+    }
+  }
+});
+
+test('影像识别轮廓估高：县城以多层/低层为主，高层占少数', () => {
+  const r = rng(11);
+  let high = 0;
+  let low = 0;
+  const n = 3000;
+  for (let i = 0; i < n; i++) {
+    const e = estimateHeight({ building: 'yes', source: 'imagery-footprint' }, { area: [80, 200, 450, 800, 2500][i % 5], ratio: i % 3 ? 1.5 : 3 }, r, 1);
+    if (e.lv >= 11) high++;
+    if (e.lv <= 3) low++;
+    assert.ok(e.lv >= 1 && e.lv <= 33);
+  }
+  assert.ok(high / n < 0.2, `high-rise share ${high / n}`);
+  assert.ok(low / n > 0.3, `low-rise share ${low / n}`);
 });

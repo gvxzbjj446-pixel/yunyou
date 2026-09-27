@@ -1,3 +1,5 @@
+import { PUYANG } from './puyang.js';
+
 // 城市与景点数据。郑州为默认城市，包含精细模型、详细介绍与电影级运镜脚本；
 // 其他预置城市使用 OSM 建筑 + 自动生成的运镜；任意城市可通过搜索动态生成。
 // 景点实用信息（开放时间/门票）仅供参考，以景区官方公告为准。
@@ -214,6 +216,7 @@ const L = (id, name, lon, lat, intro, extra = {}) => ({ id, name, lon, lat, intr
 
 export const PRESET_CITIES = [
   ZHENGZHOU,
+  PUYANG,
   {
     id: 'beijing', name: '北京', en: 'Beijing', province: '北京', slogan: '中轴线上的千年帝都', center: [116.397, 39.912], elevation: 45, cover: 'linear-gradient(135deg,#8b1d1d,#d4a035)',
     desc: '六朝古都，中轴线串起故宫、天安门与鸟巢。', guide: { city: '北京', en: 'Beijing' },

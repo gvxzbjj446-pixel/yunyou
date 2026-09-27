@@ -71,7 +71,7 @@ export async function overpass(query, { timeoutMs = 60000, priority = 0 } = {}) 
 
 // ---------------------------------------------------------------- 建筑
 // 清洗/估高规则版本：变更后服务端缓存目录随之切换，旧数据自动失效
-export const RULES_VERSION = 6;
+export const RULES_VERSION = 7;
 const M_PER_DEG_LAT = 110574;
 
 /** 以经纬度环构造局部米制坐标（小范围等距近似），用于面积/形状判断 */
@@ -117,6 +117,18 @@ export function estimateHeight(tags, geom, rand, density = 1) {
   const u = rand();
   let lv;
   if (SMALL.has(t)) return { h: 3 + u * 1.5, mh: minH, est: 1, lv: 1 };
+  // 影像识别轮廓（补充数据，多在县城与城乡结合部）：没有用途标签，按县城实际以多层/低层为主，
+  // 只有方正且面积适中的楼块才较大概率是高层住宅
+  if (tags.source === 'imagery-footprint') {
+    if (a < 120) lv = 1 + Math.round(u);
+    else if (a < 300) lv = u < 0.7 ? 2 + Math.floor(u * 3) : 4 + Math.floor(u * 3);
+    else if (a > 1800) lv = 2 + Math.floor(u * 3);
+    else if (r < 2.2 && a < 1100) lv = u < 0.3 * density ? 11 + Math.floor(u * 50) : 5 + Math.floor(u * 3);
+    else if (r >= 2.6) lv = u < 0.15 * density ? 11 + Math.floor(u * 45) : 4 + Math.floor(u * 4);
+    else lv = 3 + Math.floor(u * 4);
+    lv = Math.min(lv, 33);
+    return { h: lv * 3.1 + 1.2, mh: minH, est: 1, lv };
+  }
   if (HOUSES.has(t)) lv = 2 + Math.round(u);
   else if (RELIGIOUS.has(t)) return { h: 10 + u * 6, mh: minH, est: 1, lv: 1 };
   else if (INDUSTRIAL.has(t)) return { h: 8 + u * 8, mh: minH, est: 1, lv: 2 };
@@ -235,6 +247,35 @@ export function processBuildings(osm, z, x, y) {
     return !covered;
   });
   return { v: 4, z, x, y, count: out.length, density: +density.toFixed(2), hiddenOutlines, b: out };
+}
+
+/**
+ * 合并补充建筑轮廓（OSM 未测绘区域的影像识别轮廓，见 data/buildings-supplement）。
+ * 质心落在任一 OSM 建筑内的补充轮廓视为重复并丢弃，OSM 后续补测后自动让位。
+ */
+export function mergeSupplement(osm, supp) {
+  if (!supp?.elements?.length) return osm;
+  const rings = [];
+  for (const el of osm.elements || []) {
+    if (!el.tags?.building && !el.tags?.['building:part']) continue;
+    const ways = el.type === 'way' ? [el.geometry] : (el.members || []).filter((m) => m.role !== 'inner').map((m) => m.geometry);
+    for (const g of ways) {
+      if (!g?.length) continue;
+      const r = g.filter(Boolean).map((p) => [p.lon, p.lat]);
+      let w = Infinity, s = Infinity, e = -Infinity, n = -Infinity;
+      for (const [lo, la] of r) {
+        w = Math.min(w, lo); e = Math.max(e, lo); s = Math.min(s, la); n = Math.max(n, la);
+      }
+      rings.push({ r, w, s, e, n });
+    }
+  }
+  const extra = supp.elements.filter((el) => {
+    const g = el.geometry || el.members?.find((m) => m.role === 'outer')?.geometry;
+    if (!g?.length) return false;
+    const [cx, cy] = centroid(g.map((p) => [p.lon, p.lat]));
+    return !rings.some((k) => cx >= k.w && cx <= k.e && cy >= k.s && cy <= k.n && pointInPolygon(cx, cy, k.r));
+  });
+  return { ...osm, elements: (osm.elements || []).concat(extra) };
 }
 
 export function buildingsQuery(z, x, y) {

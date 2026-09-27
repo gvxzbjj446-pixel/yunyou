@@ -2,6 +2,7 @@
 import * as THREE from 'three';
 import { Kit, prism, eave, cap, hall, pagoda, lathe, smoothProfile, rampart, rod, star5, canvasTexture, mergeGeometries, ensureCCW } from './modelkit.js';
 import { ZZ_GEO } from '../data/zhengzhou-geo.js';
+import { puyangBuilders, puyangExclusions } from './landmarks-puyang.js';
 import { rng } from '../core/geo.js';
 import { elongation, centroid, pointInPolygon, distToSegment } from '../core/poly.js';
 
@@ -683,6 +684,7 @@ export const MODEL_BUILDERS = {
     templeGroup(kit, frame, anchor, ZZ_GEO.shaolin, groundAt, { tiles: 'gray', highlight: { 大雄宝殿: { double: true, h: 8 }, 天王殿: { h: 6 }, 山门: { h: 5 } } }),
   talin: ({ kit, frame, anchor, groundAt }) => talin(kit, frame, anchor, groundAt),
   shangwalls: ({ kit, frame, anchor, groundAt }) => shangWalls(kit, frame, anchor, groundAt),
+  ...puyangBuilders(templeGroup),
 };
 
 /** 各模型需要从 OSM 建筑中剔除的对象（避免重叠） */
@@ -709,6 +711,7 @@ export function exclusionsFor(modelIds, frame) {
     }
     if (id === 'chenghuang') ids.push(...ZZ_GEO.chenghuang.map((h) => h.id));
     if (id === 'shaolin') ids.push(...ZZ_GEO.shaolin.map((h) => h.id));
+    ex.push(...puyangExclusions(id, frame));
   }
   if (ids.length) ex.push({ ids });
   return ex;

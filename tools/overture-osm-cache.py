@@ -150,8 +150,18 @@ def geom(ring):
     return [{'lat': round(y, 7), 'lon': round(x, 7)} for x, y in ring.coords]
 
 
-def building_element(row, part):
+def supplement_id(row):
+    """影像识别轮廓没有 OSM id：由 Overture GERS id 派生稳定的整数 id（5e15 起，避开 OSM id 空间，< 2^53）。"""
+    return 5 * 10**15 + int(row['id'].replace('-', '')[:13], 16) % (4 * 10**15)
+
+
+def building_element(row, part, supplement=False):
     kind, oid = osm_ref(row)
+    if supplement:
+        # 只收录 OSM 没有的轮廓；OSM 要素仍由 Overpass 提供
+        if kind:
+            return None
+        kind, oid = 'way', supplement_id(row)
     if not kind:
         return None
     t = {('building:part' if part else 'building'): row.get('class') or 'yes'}
@@ -220,14 +230,46 @@ def write(cache, kind, tiles, release, bbox):
     print(f'raw-{kind}{Z}: {len(tiles)} tiles, {sum(map(len, tiles.values()))} elements', file=sys.stderr)
 
 
+def write_supplement(out, release, bbox):
+    tiles = {}
+    for row in read_theme(release, 'theme=buildings/type=building', bbox):
+        r = building_element(row, False, supplement=True)
+        # 只收录质心在 bbox 内的，分多次生成相邻范围时不会产生残缺瓦片
+        if r:
+            c = wkb.loads(row['geometry']).centroid
+            if bbox[0] <= c.x <= bbox[2] and bbox[1] <= c.y <= bbox[3]:
+                tiles.setdefault(r[0], []).append(r[1])
+    d = os.path.join(out, str(Z))
+    os.makedirs(d, exist_ok=True)
+    total = 0
+    for (x, y), els in tiles.items():
+        f = os.path.join(d, f'{x}_{y}.json.gz')
+        old = json.load(gzip.open(f))['elements'] if os.path.exists(f) else []
+        merged = {e['id']: e for e in old}
+        for e in els:
+            e['tags']['source'] = 'imagery-footprint'
+            # 精度 1e-6°（约 0.1 m）足够，控制仓库体积
+            for p in e.get('geometry') or []:
+                p['lat'], p['lon'] = round(p['lat'], 6), round(p['lon'], 6)
+            merged[e['id']] = e
+        with gzip.open(f, 'wt', compresslevel=9) as fh:
+            json.dump({'generator': f'overture {release} (non-OSM building footprints)', 'license': 'ODbL-1.0 (Overture Maps Foundation buildings)', 'elements': list(merged.values())}, fh, separators=(',', ':'))
+        total += len(els)
+    print(f'supplement: {len(tiles)} tiles, {total} buildings', file=sys.stderr)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split('\n')[0])
     ap.add_argument('--bbox', required=True, help='west,south,east,north')
     ap.add_argument('--cache', default=os.path.join(os.path.dirname(__file__), '..', 'cache'))
     ap.add_argument('--release', default='2026-09-23.0')
     ap.add_argument('--no-roads', action='store_true')
+    ap.add_argument('--supplement', metavar='DIR', help='改为输出补充建筑（仅 OSM 没有的轮廓）到 DIR/14/，与已有文件按 id 合并；服务端会与 Overpass 结果合并')
     a = ap.parse_args()
     bbox = tuple(map(float, a.bbox.split(',')))
+    if a.supplement:
+        write_supplement(a.supplement, a.release, bbox)
+        return
     tiles = {}
     for theme, part in (('theme=buildings/type=building', False), ('theme=buildings/type=building_part', True)):
         for row in read_theme(a.release, theme, bbox):

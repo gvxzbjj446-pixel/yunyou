@@ -6,7 +6,7 @@ import { DEM_Z } from './terrain.js';
 
 const Z = 14;
 // 服务端估高/清洗规则变更时递增，绕过浏览器缓存
-export const DATA_VERSION = 6;
+export const DATA_VERSION = 7;
 
 export class BuildingLayer {
   constructor({ scene, frame, terrain, renderer, exclusions = [] }) {
