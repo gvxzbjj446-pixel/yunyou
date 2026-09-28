@@ -11,6 +11,7 @@ import { createHash } from 'node:crypto';
 import { Limiter, fetchWithTimeout, retry, HttpError, DiskCache, dedupe } from './upstream.mjs';
 import { overpass, buildingsQuery, featuresQuery, processBuildings, processFeatures, mergeSupplement, fetchPoisOverpass, fetchAttractions, overpassHealth, RULES_VERSION } from './osm.mjs';
 import { fetchGuide, fetchWikiSummary, fetchWeather, geocode, fetchPoisAmap } from './providers.mjs';
+import { createPoisService } from './pois.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const PUBLIC = join(ROOT, 'public');
@@ -71,6 +72,7 @@ const BASE = (() => {
 })();
 const AMAP_KEY = process.env.AMAP_KEY || '';
 const cache = new DiskCache(process.env.CACHE_DIR || join(ROOT, 'cache'));
+const poisFor = createPoisService({ cache, fetchAmap: fetchPoisAmap, fetchOsm: fetchPoisOverpass, amapKey: AMAP_KEY });
 
 // ---- 瓦片源 ----
 const IMG_MAX_Z = 19;
@@ -310,22 +312,8 @@ async function handle(req, res) {
     const lat = num(q.get('lat'), -85, 85, 'lat');
     const lon = num(q.get('lon'), -180, 180, 'lon');
     const r = num(q.get('r') || 800, 50, 3000, 'r');
-    const key = `${lat.toFixed(4)},${lon.toFixed(4)},${Math.round(r)}`;
-    const data = await cache.json('pois', `${AMAP_KEY ? 'amap' : 'osm'}:${key}`, DAY, async () => {
-      let list = [];
-      let source = 'OpenStreetMap';
-      if (AMAP_KEY) {
-        try {
-          list = await fetchPoisAmap(lat, lon, r, AMAP_KEY);
-          source = '高德地图';
-        } catch (e) {
-          console.warn('[amap]', e.message);
-        }
-      }
-      if (!list.length) list = await fetchPoisOverpass(lat, lon, r);
-      return { source, radius: r, items: list.slice(0, 200) };
-    });
-    return sendJson(req, res, data, 3600);
+    const data = await poisFor(lat, lon, r);
+    return sendJson(req, res, data);
   }
   if (p === '/api/guide') {
     const city = (q.get('city') || '').slice(0, 40);

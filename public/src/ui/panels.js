@@ -1,8 +1,8 @@
 // 界面面板：景点详情（介绍/攻略/附近店铺）、城市攻略抽屉、城市选择、小地图。
 import { escapeHtml as h } from './hotspots.js';
 
-const api = async (path) => {
-  const r = await fetch(path);
+const api = async (path, options) => {
+  const r = await fetch(path, options);
   const d = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
   return d;
@@ -87,6 +87,8 @@ export class LandmarkPanel {
     return this.root.classList.contains('open');
   }
   close() {
+    this.nearbyRequestId = (this.nearbyRequestId || 0) + 1;
+    this.nearbyDone = false;
     this.root.classList.remove('open');
     this.root.setAttribute('aria-hidden', 'true');
     this.handlers.close?.();
@@ -102,6 +104,8 @@ export class LandmarkPanel {
     this.city = city;
     this.guideDone = false;
     this.nearbyDone = false;
+    this.nearbyRequestId = (this.nearbyRequestId || 0) + 1;
+    this.poiFilter = 'all';
     const r = this.root;
     r.querySelector('.kicker').textContent = lm.kicker || '热门景点';
     r.querySelector('.hero h2').textContent = lm.name;
@@ -187,19 +191,23 @@ export class LandmarkPanel {
   async renderNearby() {
     if (this.nearbyDone) return;
     this.nearbyDone = true;
+    const requestId = this.nearbyRequestId = (this.nearbyRequestId || 0) + 1;
     const lm = this.lm;
     const body = this.root.querySelector('[data-body="nearby"]');
     body.innerHTML = '<div class="spinner"></div><p class="muted" style="text-align:center">正在查询周边店铺……</p>';
     let data;
     try {
-      data = await api(`api/pois?lat=${lm.lat}&lon=${lm.lon}&r=1000`);
+      // v=2 bypasses previously cached OSM responses from before AMap was enabled.
+      data = await api(`api/pois?lat=${lm.lat}&lon=${lm.lon}&r=1000&v=2`, { cache: 'no-store' });
     } catch (e) {
-      if (this.lm === lm) body.innerHTML = `${failNote('周边店铺', e.message)}<button class="retry">重试</button>`;
+      if (this.lm !== lm || this.nearbyRequestId !== requestId) return;
+      this.nearbyDone = false;
+      body.innerHTML = `${failNote('周边店铺', e.message)}<button class="retry">重新查询</button>`;
       const b = body.querySelector('.retry');
       if (b) b.onclick = () => ((this.nearbyDone = false), this.renderNearby());
       return;
     }
-    if (this.lm !== lm) return;
+    if (this.lm !== lm || this.nearbyRequestId !== requestId) return;
     this.pois = data.items;
     this.poiSource = data.source;
     this.drawPois();
@@ -214,16 +222,17 @@ export class LandmarkPanel {
       .map(([k, c]) => `<button data-cat="${k}" class="${this.poiFilter === k ? 'on' : ''}">${c.emoji} ${c.label}${k === 'all' ? ` ${this.pois.length}` : ` ${counts[k]}`}</button>`)
       .join('');
     const list = this.pois.filter((p) => this.poiFilter === 'all' || p.cat === this.poiFilter).slice(0, 80);
-    body.innerHTML = `<div class="chips">${chips}</div><div class="chips"><button class="show-all">📍 在 3D 场景中标出</button></div><ul class="poi-list">${
+    body.innerHTML = `<div class="chips">${chips}</div><div class="chips"><button class="show-all">📍 在 3D 场景中标出</button><button class="retry">重新查询</button></div><ul class="poi-list">${
       list
         .map(
           (p, i) =>
             `<li data-i="${i}"><span class="pi">${CAT[p.cat]?.emoji || '📍'}</span><span><b>${h(p.name)}</b><small>${h(p.sub || '')}${p.rating ? ` · ⭐${p.rating}` : ''}${p.cost ? ` · 人均¥${p.cost}` : ''}${p.addr ? ` · ${h(p.addr)}` : ''}</small>${p.hours ? `<small>🕒 ${h(p.hours)}</small>` : ''}</span><span class="d">${p.dist < 1000 ? `${p.dist} m` : `${(p.dist / 1000).toFixed(1)} km`}<small>步行${Math.max(1, Math.round(p.dist / 75))}分</small></span></li>`,
         )
-        .join('') || '<p class="muted">该分类暂无数据。</p>'
-    }</ul><div class="src">数据来源：${h(this.poiSource)}${this.poiSource === 'OpenStreetMap' ? '（社区数据，覆盖可能不全；配置高德 Key 后可获得更完整的国内店铺）' : ''}</div>`;
+        .join('') || `<p class="muted">${this.pois.length ? '该分类暂无数据。' : '附近暂未找到店铺，可重新查询。'}</p>`
+    }</ul><div class="src">数据来源：${h(this.poiSource)}${this.poiSource === 'OpenStreetMap' ? '（附近店铺可能收录不全）' : ''}</div>`;
     body.querySelectorAll('.chips [data-cat]').forEach((b) => (b.onclick = () => ((this.poiFilter = b.dataset.cat), this.drawPois())));
     body.querySelector('.show-all').onclick = () => this.handlers.showPois?.(list.slice(0, 40));
+    body.querySelector('.retry').onclick = () => ((this.nearbyDone = false), this.renderNearby());
     body.querySelectorAll('.poi-list li').forEach((li) => (li.onclick = () => this.handlers.poi?.(list[+li.dataset.i], list.slice(0, 40))));
   }
 }

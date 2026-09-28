@@ -318,6 +318,49 @@ async function geocodeNominatim(q) {
 
 // ---------------------------------------------------------------- 高德周边（配置 AMAP_KEY 后启用，数据更贴近国内）
 const AMAP_TYPES = '050000|060000|080000|100000|110000|140000';
+// 分页、并发景点和重试共用一条请求队列，避免免费 Web 服务的每秒配额被瞬时请求耗尽。
+const amapLimiter = new Limiter(1, 1100);
+const AMAP_QPS_CODES = new Set(['10019', '10020', '10021']);
+const AMAP_QPS_INFO = /^(?:C|CK|CU|CUK|K)?QPS_HAS_EXCEEDED_THE_LIMIT$/;
+
+function amapError(message, retryable = false, status = 502) {
+  const error = new HttpError(status, `amap: ${message}`);
+  error.retryable = retryable;
+  return error;
+}
+
+async function getAmapJson(url) {
+  return retry(
+    () => amapLimiter.run(async () => {
+      let res;
+      try {
+        res = await fetchWithTimeout(url, {}, 25000);
+      } catch (e) {
+        // 原始网络错误可能含带 Key 的 URL，日志与 API 错误只保留固定诊断文本。
+        throw amapError(e.name === 'AbortError' ? 'request timed out' : 'network request failed', true);
+      }
+      if (!res.ok) {
+        const transient = res.status === 429 || res.status >= 500;
+        throw amapError(`HTTP ${res.status}`, transient, res.status === 429 ? 503 : 502);
+      }
+      let data;
+      try {
+        data = await res.json();
+      } catch {
+        throw amapError('invalid JSON response');
+      }
+      if (data?.status !== '1') {
+        const code = /^\d{5}$/.test(String(data?.infocode)) ? String(data.infocode) : 'unknown';
+        const limited = AMAP_QPS_CODES.has(code) || AMAP_QPS_INFO.test(data?.info || '');
+        // 只重试明确的瞬时 QPS 限流；密钥、权限、每日配额等错误立即交给调用方。
+        throw amapError(`${limited ? 'QPS limit' : 'API rejected request'} (infocode ${code})`, limited, limited ? 503 : 502);
+      }
+      return data;
+    }),
+    { tries: 3, baseDelay: 1100, shouldRetry: (e) => e.retryable === true },
+  );
+}
+
 function amapCategory(typecode) {
   const p = typecode.slice(0, 2);
   if (p === '05') return typecode.startsWith('0505') || typecode.startsWith('0507') ? 'drink' : 'food';
@@ -331,8 +374,7 @@ export async function fetchPoisAmap(lat, lon, radius, key) {
   const out = [];
   for (let page = 1; page <= 3; page++) {
     const url = `https://restapi.amap.com/v5/place/around?key=${key}&location=${g.lon.toFixed(6)},${g.lat.toFixed(6)}&radius=${Math.round(radius)}&types=${AMAP_TYPES}&page_size=25&page_num=${page}&show_fields=business,photos`;
-    const d = await getJson(url);
-    if (d.status !== '1') throw new HttpError(502, `amap: ${d.info}`);
+    const d = await getAmapJson(url);
     for (const p of d.pois || []) {
       const [glon, glat] = p.location.split(',').map(Number);
       const w = gcj02ToWgs84(glon, glat);
